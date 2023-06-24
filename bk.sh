@@ -1,4 +1,7 @@
 #!/bin/bash
+if [ ! -d "/etc/VestaCP" ] && [ ! -d "/etc/HestiaCP" ] && [ ! -d "/etc/cyberpanel" ] && [ ! -d "/usr/local/mgr5" ]; then
+exit 1
+fi
 if [ ! -d "/backup" ]; then
 mkdir -p "$FOLDER_PATH"
 fi
@@ -33,22 +36,25 @@ if [ -d "/etc/VestaCP" ]; then
     echo "Найдена папка VestaCP в директории /etc"
     # Ваши действия для VestaCP
 	rsync -azhP /home/admin/web* /backup/tmp.bk/web
-
 fi
-
 # Проверка наличия папки HestiaCP в директории /etc
 if [ -d "/etc/HestiaCP" ]; then
     echo "Найдена папка HestiaCP в директории /etc"
     # Ваши действия для HestiaCP
 	rsync -azhP /home/admin/web* /backup/tmp.bk/web
 fi
-
+if [ -d "/etc/cyberpanel" ]; then
+    echo "Найдена папка CyberPanel в директории /etc"
+    # Ваши действия для HestiaCP
+	rsync -azhP /home/* /backup/tmp.bk/web
+fi
 # Проверка наличия папки mgr5 в директории /usr/local
 if [ -d "/usr/local/mgr5" ]; then
     echo "Найдена папка mgr5 в директории /usr/local"
     # Ваши действия для ISPManager
 	rsync -azhP /var/www/www-root/data/www/* /backup/tmp.bk/web
 fi
+
 tar -cf /backup_$(date +%Y-%m-%d).tar.gz /backup/tmp.bk
 curlftpfs -o allow_other $USER:$PASS@SERVER:21 /mnt
 rsync -azhP /backup/*.tar.gz /$WHERE2
