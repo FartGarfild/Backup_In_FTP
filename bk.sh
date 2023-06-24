@@ -57,3 +57,4 @@ curlftpfs -o allow_other $USER:$PASS@SERVER:21 /mnt
 cp /backup/*.tar.gz /$WHERE2
 unmount /mnt
 rm -rf /backup/tmp.bk
+rm /backup/*.tar.gz
