@@ -33,12 +33,12 @@ for DATABASE in $DB_LIST; do
     mysqldump -h $DB_HOST -u $DB_USER -p$DB_PASSWORD $DATABASE > "$BACKUP_DIR/$DATABASE.sql"
 done
 # Проверка наличия папки VestaCP в директории /etc
-if [ -d "/etc/VestaCP" ]; then
+if [ -d "/etc/vesta" ]; then
     echo "Найдена папка VestaCP в директории /etc"
 	rsync -azhP /home/admin/web* /backup/tmp.bk/web
  fi
 # Проверка наличия папки HestiaCP в директории /etc
-if [ -d "/etc/HestiaCP" ]; then
+if [ -d "/etc/hestia" ]; then
     echo "Найдена папка HestiaCP в директории /etc"
 	rsync -azhP /home/admin/web* /backup/tmp.bk/web
 fi
@@ -55,6 +55,6 @@ fi
 tar -cf /backup_$(date +%Y-%m-%d).tar.gz /backup/tmp.bk
 curlftpfs -o allow_other $USER:$PASS@SERVER:21 /mnt
 cp /backup/*.tar.gz /$WHERE2
-unmount /mnt
+umount /mnt
 rm -rf /backup/tmp.bk
 rm /backup/*.tar.gz
