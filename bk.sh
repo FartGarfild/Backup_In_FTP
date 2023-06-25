@@ -1,6 +1,6 @@
 #!/bin/bash
 #Проверка на наличие одной из четырёх панелей управления, если нет ниодной скрипт останавливается
-if [ ! -d "/etc/VestaCP" ] && [ ! -d "/etc/HestiaCP" ] && [ ! -d "/etc/cyberpanel" ] && [ ! -d "/usr/local/mgr5" ]; then
+if [ ! -d "/etc/vesta" ] && [ ! -d "/etc/hestia" ] && [ ! -d "/etc/cyberpanel" ] && [ ! -d "/usr/local/mgr5" ]; then
 exit 1
 fi
 #Проверка на наличие папки бекап, если нет создаст.
