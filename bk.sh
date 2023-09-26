@@ -1,7 +1,7 @@
 #!/bin/bash
 # Переменные
 DB_HOST="localhost"
-DB_USER="root" #Пользователь баз данных
+DB_USER="root" #Пользователь всех баз данных
 DB_PASSWORD="" #Пароль от пользователя 
 #Настройки подключения FTP
 SERVER="" #Сервер FTP
