@@ -2,17 +2,17 @@
 # Переменные
 DB_HOST="localhost"
 DB_USER="root" #Пользователь всех баз данных
-DB_PASSWORD="" #Пароль от пользователя 
+DB_PASSWORD="*******" #Пароль от пользователя 
 #Настройки подключения FTP
-SERVER="" #Сервер FTP
-USER="" #Пользователь FTP
-PASS="" #Пароль FTP
+SERVER="*****" #Сервер FTP
+USER="*****" #Пользователь FTP
+PASS="****" #Пароль FTP
 PORT="21" #На случай если нужно использовать SFTP 
-WHERE2=""#Путь в FTP хранилище куда будут идти файлы
+WHERE2="****"#Путь в FTP хранилище куда будут идти файлы
 
 # Пути (Нипутю - тут не хватает котиков)
 disk_path="/dev/vda2" # Для проверки места на диске
-BACKUP_DIR="/backup/tmp.bk/db" # Папка куда будут идти бекапы
+BACKUP_DIR="/backup/tmp.bk/" # Папка куда будут идти бекапы
 log_file="/var/log/sh_backup.log" # Лог файл
 
 #Обработчик ошибок
@@ -27,8 +27,20 @@ trap 'handle_error' ERR
 #Очистка если скрипт завершился ошибкой
 cleanup_folder() {
 rm -rf /backup/tmp.bk
-rm /backup/*.tar.gz
+rm /backup/$(date +%Y-%m-%d).tar.gz
 }
+# Проверка пакетного менеджера
+if command -v apt-get > /dev/null; then
+    package_manager="apt"
+elif command -v yum > /dev/null; then
+    package_manager="yum"
+else
+    echo "Не удалось определить пакетный менеджер для установки пакетов" >> "$log_file"
+    exit 1
+fi
+# Проверка и установка пакетов
+check_and_install_package "curlftpfs" "$package_manager"
+check_and_install_package "rsync" "$package_manager"
 # Проверка наличия пакета и установка
 check_and_install_package() {
     local package_name="$1"
@@ -49,18 +61,7 @@ check_and_install_package() {
         esac
     fi
 }
-# Проверка пакетного менеджера
-if command -v apt-get > /dev/null; then
-    package_manager="apt"
-elif command -v yum > /dev/null; then
-    package_manager="yum"
-else
-    echo "Не удалось определить пакетный менеджер для установки пакетов" >> "$log_file"
-    exit 1
-fi
-# Проверка и установка пакетов
-check_and_install_package "curlftpfs" "$package_manager"
-check_and_install_package "rsync" "$package_manager"
+
 
 #Проверка на наличие одной из четырёх панелей управления, если нет ниодной скрипт останавливается
 if [ ! -d "/etc/vesta" ] && [ ! -d "/etc/hestia" ] && [ ! -d "/etc/cyberpanel" ] && [ ! -d "/usr/local/mgr5" ]; then
@@ -88,14 +89,15 @@ mkdir /backup/tmp.bk
 mkdir /backup/tmp.bk/web
 mkdir /backup/tmp.bk/db
 #Проверка баз данных и исключение стандартных БД.
-DB_LIST=$(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e "SHOW DATABASES WHERE \`Database\` NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" | grep -v Database)
+#DB_LIST=$(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e "SHOW DATABASES WHERE \`Database\` NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" | grep -v Database)
 
 # Имя и путь для сохранения резервных копий
 
 CURRENT_DATE=$(date +%Y-%m-%d)
-BACKUP_PATH="${BACKUP_DIR}/db_backup_${CURRENT_DATE}.sql"
-for DATABASE in ${DB_LIST}; do
-    mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "$BACKUP_DIR/$DATABASE.sql"
+#BACKUP_PATH="${BACKUP_DIR}/db_backup_${CURRENT_DATE}.sql"
+#for DATABASE in ${DB_LIST}; do
+    #mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "$BACKUP_DIR/$DATABASE.sql"
+for db in $(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e 'show databases' -s --skip-column-names); do if [[ "$db" != "information_schema" && "$db" != "performance_schema" && "$db" != "mysql" && "$db" != "sys" && "$db" != "roudcube" && "$db" != "phpmyadmin"]]; then mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} "$BACKUP_DIR/$db.sql"; fi; done
 done
 # Проверка наличия папки VestaCP в директории /etc
 if [ -d "/etc/vesta" ]; then
@@ -125,7 +127,7 @@ tar -cf /backup_$(date +%Y-%m-%d).tar.gz /backup/tmp.bk
 echo "Подключение" >> "$log_file"
 curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:$PORT /mnt
 echo "Копирование" >> "$log_file"
-cp /backup/*.tar.gz /${WHERE2}
+cp /backup/$(date +%Y-%m-%d).tar.gz /${WHERE2}
 echo "Копирование завершено" >> "$log_file"
 umount /mnt
 cleanup_folder
