@@ -9,7 +9,8 @@ USER="" #Пользователь FTP
 PASS="" #Пароль FTP
 PORT="21" #На случай если нужно использовать SFTP 
 WHERE2="/backup" #Путь в FTP хранилище куда будут идти файлы
-MAX_FTP_SIZE="" #Размер FTP хранилища в ГБ.
+
+MAX_FTP_SIZE="75" #Размер FTP хранилища в ГБ.
 
 
 # Пути
@@ -134,10 +135,8 @@ done
 # Само копирование файлов
 echo "Копирование файлов сайтов" >> "$log_file"
 rsync -azhP ${FILESPATH} /backup/tmp.bk/web
-echo "Архивирование" >> "$log_file"
-tar -cf /backup/backup_$(date +%Y-%m-%d).tar.gz /backup/tmp.bk
-echo "Копирование" >> "$log_file"
-rsync -azhP /backup/*.tar.gz /mnt/${WHERE2}
+echo "Архивирование архива напрямую в FTP" >> "$log_file"
+tar -cf /mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz /backup/tmp.bk
 echo "Копирование завершено" >> "$log_file"
 umount /mnt
 cleanup_folder
