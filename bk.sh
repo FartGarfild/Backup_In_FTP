@@ -9,7 +9,9 @@ USER="" #Пользователь FTP
 PASS="" #Пароль FTP
 PORT="21" #На случай если нужно использовать SFTP 
 WHERE2="/backup" #Путь в FTP хранилище куда будут идти файлы
+LOCK_FILE="/var/lock/backup.lock" # Нужен чтобы не запускался скрипт пока уже запущен другой процесс.
 
+KEEP_FILES=3 # Количество бекапов.
 MAX_FTP_SIZE="75" #Размер FTP хранилища в ГБ.
 
 
@@ -19,19 +21,30 @@ BACKUP_DIR="/backup/tmp.bk/db" # Папка куда будут идти бек�
 log_file="/var/log/sh_backup.log" # Лог файл
 FILESPATH="/"#Путь к папке которая будет копироваться
 
+
 #Обработчик ошибок
 handle_error() {
 touch /var/log/sh_backup.log
     echo "ERROR." >> "$log_file"  # Логирование ошибки в файл
     cleanup_folder
+    umount /mnt
     exit 1
 }
 # Установка обработчика ошибки
 trap 'handle_error' ERR
+# Предотвращения запуска нескольких екземпляров скрипта.
+if [ -e "$LOCK_FILE" ]; then
+    echo "Предыдущий процесс бэкапа всё ещё выполняется" >> "$log_file"
+    exit 1
+fi
+
+touch "$LOCK_FILE"
+trap 'rm -f $LOCK_FILE' EXIT
+
 #Очистка если скрипт завершился ошибкой
 cleanup_folder() {
-rm -rf /backup/tmp.bk
-rm /backup/*.tar.gz
+    [ -d "/backup/tmp.bk" ] && rm -rf /backup/tmp.bk
+    [ "$(ls /backup/*.tar.gz 2>/dev/null)" ] && rm /backup/*.tar.gz
 }
 check_and_install_package() {
     local package_name="$1"
@@ -82,12 +95,6 @@ fi
 # Подключение к БД.
 echo "Подключение" >> "$log_file"
 curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:$PORT /mnt
-if [ ! -w "/backup" ]; then
-    echo "Недостаточно прав для записи в директорию /backup" >> "$log_file"
-	umount /mnt
-	cleanup_folder
-    exit 1
-fi
 # Выполнение запроса к базе данных MySQL и извлечение общего размера
 query="SELECT SUM(data_length + index_length) FROM information_schema.TABLES WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');"
 db_size=$(mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -N -s -e "$query")
@@ -96,15 +103,21 @@ db_size=$(mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -N -s -e "$qu
 if [ ! -d "/backup" ]; then
 mkdir -p "/backup"
 fi
-mkdir /backup/tmp.bk
-mkdir /backup/tmp.bk/web
-mkdir /backup/tmp.bk/db
+if [ ! -w "/backup" ]; then
+    echo "Недостаточно прав для записи в директорию /backup" >> "$log_file"
+	umount /mnt
+	cleanup_folder
+    exit 1
+fi
+mkdir -p /backup/tmp.bk/{web,db}
 
+# Пересчёт в килобайты.
 gb_to_kb() {
     echo $((${1} * 1024 * 1024))
 }
+
 # Получение максимального размера FTP хранилища в килобайтах
-max_ftp_size_kb=$(gb_to_kb "$MAX_FTP_SIZE")
+max_ftp_size_kb=$(($(gb_to_kb "$MAX_FTP_SIZE") * 95 / 100))
 # Получение доступного места на диске в килобайтах
 available_space=$(df -k --output=avail "$disk_path" | tail -n 1)
 # Получение размера бэкапа в килобайтах
@@ -136,7 +149,13 @@ done
 echo "Копирование файлов сайтов" >> "$log_file"
 rsync -azhP ${FILESPATH} /backup/tmp.bk/web
 echo "Архивирование архива напрямую в FTP" >> "$log_file"
-tar -cf /mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz /backup/tmp.bk
+tar -czf "/mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz" /backup/tmp.bk || {
+    echo "Ошибка при создании архива" >> "$log_file"
+    cleanup_folder
+    exit 1
+}
+# Ротация файлов
+ls -t "/mnt/${WHERE2}/backup_*.tar.gz" | tail -n +$((KEEP_FILES + 1)) | xargs -r rm -f
 echo "Копирование завершено" >> "$log_file"
 umount /mnt
 cleanup_folder
