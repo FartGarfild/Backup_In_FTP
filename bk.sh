@@ -62,33 +62,18 @@ if ! mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -e "SELECT 1" &> /
     exit 1
 fi
 
-# Проверка пакетов.
-check_and_install_package() {
+# Проверка и установка пакетов
+install_package() {
     local package_name="$1"
-    local package_manager="$2"
     if ! command -v "$package_name" > /dev/null; then
         echo "Установка пакета $package_name..." >> "$log_file"
-         case "$package_manager" in
-            apt)
-                sudo apt-get update
-                sudo apt-get install -y "$package_name"
-                ;;
-            yum)
-                sudo yum install -y "$package_name"
-                ;;
-			dnf)
-                sudo dnf install -y "$package_name"
-                ;;
-            *)
-                echo " $(date '+%Y-%m-%d %H:%M:%S') Не удалось определить пакетный менеджер для установки пакета $package_name" >> "$log_file"
-                ;;
-        esac
+        sudo "$package_manager" install -y "$package_name"
     fi
 }
 
-# Проверка пакетного менеджера
+# Определение пакетного менеджера
 if command -v apt-get > /dev/null; then
-    package_manager="apt"
+    package_manager="apt-get"
 elif command -v yum > /dev/null; then
     package_manager="yum"
 elif command -v dnf > /dev/null; then
@@ -98,19 +83,17 @@ else
     exit 1
 fi
 
-# Проверка и установка пакетов
+# Установка необходимых пакетов в зависимости от метода транспорта
 if [ "$TRANSPORT_METHOD" = "0" ]; then
-    check_and_install_package "curlftpfs" "$package_manager"
-    check_and_install_package "rsync" "$package_manager"
-    
+    install_package "curlftpfs"
+    install_package "rsync"
     echo "$(date '+%Y-%m-%d %H:%M:%S') Подключение через curlftpfs" >> "$log_file"
     curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:/ /mnt
 else
-    check_and_install_package "sshfs" "$package_manager"
-    check_and_install_package "sshpass" "$package_manager"
-    check_and_install_package "rsync" "$package_manager"
-
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Подключение через sshfs" >> "$log_file"
+    install_package "sshfs"
+    install_package "sshpass"
+    install_package "rsync"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Подключение через sshfs" >> "$log_file"
     sshpass -p "${PASS}" sshfs ${USER}@${SERVER}:/ /mnt
 fi
 
