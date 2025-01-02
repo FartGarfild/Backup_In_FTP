@@ -7,9 +7,9 @@ DB_PASSWORD="" #Пароль от пользователя (обычно нах�
 SERVER="" #Сервер FTP
 USER="" #Пользователь FTP
 PASS="" #Пароль FTP
-PORT="21" #На случай если нужно использовать SFTP 
 WHERE2="/backup" #Путь в FTP хранилище куда будут идти файлы
 LOCK_FILE="/var/lock/backup.lock" # Нужен чтобы не запускался скрипт пока уже запущен другой процесс.
+TRANSPORT_METHOD="0" # 0 Для использования обычного FTP, 1 для подключения по SFTP (SSH) (Менее безопастный но более быстрый метод).
 
 KEEP_FILES=3 # Количество бекапов.
 MAX_FTP_SIZE="75" #Размер FTP хранилища в ГБ.
@@ -24,8 +24,8 @@ FILESPATH="/"#Путь к папке которая будет копирова�
 
 #Обработчик ошибок
 handle_error() {
-touch /var/log/sh_backup.log
-    echo "ERROR." >> "$log_file"  # Логирование ошибки в файл
+    touch /var/log/sh_backup.log
+    echo "ERROR: $?" >> "$log_file"  # Добавить код ошибки ( логирование )
     cleanup_folder
     umount /mnt
     exit 1
@@ -43,6 +43,9 @@ trap 'rm -f $LOCK_FILE' EXIT
 
 #Очистка если скрипт завершился ошибкой
 cleanup_folder() {
+    if mountpoint -q /mnt; then
+        umount /mnt
+    fi
     [ -d "/backup/tmp.bk" ] && rm -rf /backup/tmp.bk
     [ "$(ls /backup/*.tar.gz 2>/dev/null)" ] && rm /backup/*.tar.gz
 }
@@ -80,8 +83,25 @@ else
     exit 1
 fi
 # Проверка и установка пакетов
-check_and_install_package "curlftpfs" "$package_manager"
-check_and_install_package "rsync" "$package_manager"
+if [ "$TRANSPORT_METHOD" = "0" ]; then
+    check_and_install_package "curlftpfs" "$package_manager"
+    check_and_install_package "rsync" "$package_manager"
+    
+    echo "Подключение через curlftpfs" >> "$log_file"
+    curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:/ /mnt
+else
+    check_and_install_package "sshfs" "$package_manager"
+    check_and_install_package "sshpass" "$package_manager"
+    
+    echo "Подключение через sshfs" >> "$log_file"
+    sshpass -p "${PASS}" sshfs ${USER}@${SERVER}:/ /mnt
+fi
+# Проверка монтирования.
+if ! mountpoint -q /mnt; then
+    echo "Ошибка монтирования" >> "$log_file"
+    cleanup_folder
+    exit 1
+fi
 #Проверка указаны ли доступы FTP.
 if [ -z "$SERVER" ] || [ -z "$USER" ] || [ -z "$PASS" ]; then
     echo "Не указаны параметры FTP подключения" >> "$log_file"
@@ -92,9 +112,6 @@ if ! mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -e "SELECT 1" &> /
     echo "Ошибка подключения к базе данных" >> "$log_file"
     exit 1
 fi
-# Подключение к БД.
-echo "Подключение" >> "$log_file"
-curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:$PORT /mnt
 # Выполнение запроса к базе данных MySQL и извлечение общего размера
 query="SELECT SUM(data_length + index_length) FROM information_schema.TABLES WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');"
 db_size=$(mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -N -s -e "$query")
