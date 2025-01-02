@@ -8,8 +8,8 @@ SERVER="" #Сервер FTP
 USER="" #Пользователь FTP
 PASS="" #Пароль FTP
 WHERE2="/backup" #Путь в FTP хранилище куда будут идти файлы
-LOCK_FILE="/var/lock/backup.lock" # Нужен чтобы не запускался скрипт пока уже запущен другой процесс.
 TRANSPORT_METHOD="0" # 0 Для использования обычного FTP, 1 для подключения по SFTP (SSH) (Менее безопасный но более быстрый метод).
+SKIP_MYSQL_BACKUP="false" # Если на сервере нет баз данных то смените на true.
 
 KEEP_FILES=3 # Количество бекапов.
 MAX_FTP_SIZE="75" #Размер FTP хранилища в ГБ.
@@ -18,6 +18,10 @@ disk_path="/dev/vda1" # Для проверки места на диске (Пр
 BACKUP_DIR="/backup/tmp.bk/db" # Папка куда будут идти бекапы
 log_file="/var/log/sh_backup.log" # Лог файл
 FILESPATH="/"#Путь к папке которая будет копироваться
+
+# Эти переменные не редактировать.
+CURRENT_DATE=$(date +%Y-%m-%d)
+LOCK_FILE="/var/lock/backup.lock" # Нужен чтобы не запускался скрипт пока уже запущен другой процесс.
 
 # Зачистка логов скрипта при запуске. ( Что бы логи не заняли всё место на диске а отображались лишь последние).
 > "$log_file"
@@ -158,17 +162,20 @@ if [ "$total_size" -gt "$max_ftp_size_kb" ]; then
     exit 1
 fi
 
-# Проверка баз данных и исключение стандартных БД.
-DB_LIST=$(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e "SHOW DATABASES;" -s --skip-column-names | grep -v -E '^(information_schema|mysql|performance_schema|sys)$')
+if [ "$SKIP_MYSQL_BACKUP" != "true" ]; then
+    DB_LIST=$(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e "SHOW DATABASES;" -s --skip-column-names | grep -v -E '^(information_schema|mysql|performance_schema|sys)$')
+    
+    # Имя и путь для сохранения резервных копий
+    BACKUP_PATH="${BACKUP_DIR}/db_backup_${CURRENT_DATE}.sql"
 
-# Имя и путь для сохранения резервных копий
-CURRENT_DATE=$(date +%Y-%m-%d)
-BACKUP_PATH="${BACKUP_DIR}/db_backup_${CURRENT_DATE}.sql"
-
-# Резервное копирование каждой базы данных
-for DATABASE in ${DB_LIST}; do
-    mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "${BACKUP_DIR}/${DATABASE}.sql"
-done
+    # Резервное копирование каждой базы данных
+    for DATABASE in ${DB_LIST}; do
+        mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "${BACKUP_DIR}/${DATABASE}.sql"
+    done
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Резервное копирование MySQL завершено" >> "$log_file"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Резервное копирование MySQL пропущено" >> "$log_file"
+fi
 
 # Само копирование файлов
 echo "$(date '+%Y-%m-%d %H:%M:%S') Копирование файлов сайтов" >> "$log_file"
