@@ -62,56 +62,39 @@ if ! mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -e "SELECT 1" &> /
     exit 1
 fi
 
-# Checking packages.
-check_and_install_package() {
-    local package_name="$1"
-    local package_manager="$2"
-    if ! command -v "$package_name" > /dev/null; then
-        echo "Installing package $package_name..." >> "$log_file"
-         case "$package_manager" in
-            apt)
-                sudo apt-get update
-                sudo apt-get install -y "$package_name"
-                ;;
-            yum)
-                sudo yum install -y "$package_name"
-                ;;
-			dnf)
-                sudo dnf install -y "$package_name"
-                ;;
-            *)
-                echo " $(date '+%Y-%m-%d %H:%M:%S') Could not determine package manager to install $package_name" >> "$log_file"
-                ;;
-        esac
+# Check and install packages
+install_package() {
+    local package_name="$1”
+    if ! command -v “$package_name” > /dev/null; then
+        echo “Installing package $package_name...” >> “$log_file”
+        sudo “$package_manager” install -y “$package_name”
     fi
 }
 
-# Checking the package manager
+# Define the package manager
 if command -v apt-get > /dev/null; then
-    package_manager="apt"
+    package_manager="apt-get”
 elif command -v yum > /dev/null; then
-    package_manager="yum"
+    package_manager="yum”
 elif command -v dnf > /dev/null; then
-    package_manager="dnf"
+    package_manager="dnf”
 else
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Could not determine package manager for installing packages" >> "$log_file"
+    echo “$(date ‘+%Y-%m-%d %H:%M:%S’) Failed to detect package manager to install packages” >> “$log_file”
     exit 1
 fi
 
-# Checking and installing packages
-if [ "$TRANSPORT_METHOD" = "0" ]; then
-    check_and_install_package "curlftpfs" "$package_manager"
-    check_and_install_package "rsync" "$package_manager"
-    
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via curlftpfs" >> "$log_file"
+# Install the required packages depending on the transport method
+if [ “$TRANSPORT_METHOD” = “0” ]; then
+    install_package “curlftpfs”
+    install_package “rsync”
+    echo “$(date ‘+%Y-%m-%d %H:%M:%S’) Connecting via curlftpfs” >> “$log_file”
     curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:/ /mnt
 else
-    check_and_install_package "sshfs" "$package_manager"
-    check_and_install_package "sshpass" "$package_manager"
-    check_and_install_package "rsync" "$package_manager"
-
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via sshfs" >> "$log_file"
-    sshpass -p "${PASS}" sshfs ${USER}@${SERVER}:/ /mnt
+    install_package “sshfs”
+    install_package “sshpass”
+    install_package “rsync”
+    echo “$(date ‘+%Y-%m-%d %H:%M:%S’) Connecting via sshfs” >> “$log_file”
+    sshpass -p “${PASS}” sshfs ${USER}@${SERVER}:/ /mnt
 fi
 
 # Checking if mount is successful.
