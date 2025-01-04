@@ -15,7 +15,7 @@ KEEP_FILES=3 # Number of backups.
 MAX_FTP_SIZE="75" # FTP storage size in GB.
 # Paths
 disk_path="/dev/vda1" # For checking disk space (Check using df -h to find which disk is / and specify it here)
-BACKUP_DIR="/backup/tmp.bk/db" # Folder where backups will go
+BACKUP_DIR="/backup/tmp.bk" # Folder where backups will go
 log_file="/var/log/sh_backup.log" # Log file
 FILESPATH="/" # Path to the folder to be copied
 
@@ -125,6 +125,16 @@ else
         exit 1
     fi
 fi
+if [ ! -d "/mnt/${WHERE2}" ]; then
+    mkdir -p /mnt/${WHERE2}
+else
+    if [ ! -w "/mnt/${WHERE2}" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Insufficient permissions to write to /mnt/backup directory" >> "$log_file"
+        umount /mnt
+        cleanup_folder
+        exit 1
+    fi
+fi
 
 # Convert GB to KB
 gb_to_kb() {
@@ -162,7 +172,7 @@ if [ "$SKIP_MYSQL_BACKUP" != "true" ]; then
 
     # Backup each database
     for DATABASE in ${DB_LIST}; do
-        mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "${BACKUP_DIR}/${DATABASE}.sql"
+        mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "${BACKUP_DIR}/db/${DATABASE}.sql"
     done
     echo "$(date '+%Y-%m-%d %H:%M:%S') MySQL backup completed" >> "$log_file"
 else
