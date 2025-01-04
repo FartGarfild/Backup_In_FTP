@@ -8,7 +8,7 @@ SERVER="" # FTP server
 USER="" # FTP user
 PASS="" # FTP password
 WHERE2="/backup" # Path in the FTP storage where files will be sent
-TRANSPORT_METHOD="0" # 0 for standard FTP, 1 for SFTP (SSH) (less secure but faster method)
+TRANSPORT_METHOD="0" # 0 for standard FTP, 1 for SFTP (SSH) (less secure but faster method) (Second method dont work)
 SKIP_MYSQL_BACKUP="false" # If there are no databases on the server, change to true.
 
 KEEP_FILES=3 # Number of backups.
@@ -100,11 +100,12 @@ if [ "$TRANSPORT_METHOD" = "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via curlftpfs" >> "$log_file"
     curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:/ /mnt
 else
-    install_package "sshfs"
-    install_package "sshpass"
-    install_package "rsync"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via sshfs" >> "$log_file"
-    sshpass -p "${PASS}" sshfs ${USER}@${SERVER}:/ /mnt
+    #install_package "rclone"
+    #install_package "rsync"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via rclone" >> "$log_file"
+    #rclone mount ${USER}@${SERVER}:/ /mnt --sftp-password ${PASS}
+    exit 1
+    echo "This method in work and dont work"
 fi
 
 # Checking if the mount was successful
