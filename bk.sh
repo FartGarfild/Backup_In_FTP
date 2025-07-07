@@ -23,6 +23,12 @@ FILESPATH="/" # Path to the folder to be copied
 CURRENT_DATE=$(date +%Y-%m-%d)
 LOCK_FILE="/var/lock/backup.lock" # Ensures that the script does not run while another process is active.
 
+PRIVATE_KEY='
+-----BEGIN OPENSSH PRIVATE KEY-----
+Key there
+-----END OPENSSH PRIVATE KEY-----
+'
+
 # Clearing script logs upon startup (to prevent logs from taking up all disk space and showing only the latest entries).
 > "$log_file"
 
@@ -50,6 +56,7 @@ trap 'rm -f $LOCK_FILE' EXIT
 cleanup_folder() {
     [ -d "/backup/tmp.bk" ] && rm -rf /backup/tmp.bk
     [ "$(ls /backup/*.tar.gz 2>/dev/null)" ] && rm /backup/*.tar.gz
+    rm -f "$KEYFILE"
 }
 
 # Checking if FTP credentials are provided
@@ -100,12 +107,15 @@ if [ "$TRANSPORT_METHOD" = "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via curlftpfs" >> "$log_file"
     curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:/ /mnt
 else
-    #install_package "rclone"
-    #install_package "rsync"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via rclone" >> "$log_file"
-    #rclone mount ${USER}@${SERVER}:/ /mnt --sftp-password ${PASS}
+    install_package "sshfs"
+    install_package "rsync"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via sshfs" >> "$log_file"
+    KEYFILE=$(mktemp)
+    chmod 600 "$KEYFILE"
+    echo "$PRIVATE_KEY" > "$KEYFILE"
+    sshfs -o IdentityFile='$KEYFILE',StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null ${USER}@${SERVER}:/ /mnt
     exit 1
-    echo "This method in work and dont work"
+    echo "This method in work and testing"
 fi
 
 # Checking if the mount was successful
