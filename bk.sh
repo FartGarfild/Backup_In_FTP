@@ -2,13 +2,16 @@
 # Variables
 DB_HOST="localhost"
 DB_USER="root" # User for all databases
-DB_PASSWORD="" # Password for the user (usually located at /root/.my.cnf)
+DB_PASSWORD="" # Password for the root user (usually located at /root/.my.cnf)
 # FTP connection settings
 SERVER="" # FTP server
 USER="" # FTP user
 PASS="" # FTP password
-WHERE2="/backup" # Path in the FTP storage where files will be sent
-TRANSPORT_METHOD="0" # 0 for standard FTP, 1 for SFTP (SSH) (less secure but faster method) (Second method dont work)
+WHERE2="/backup" # The path where all backup copies will be saved.
+TRANSPORT_METHOD="0" 
+# 0: standard FTP (Temporary files are stored on the server where the sites themselves are). 
+# 1: SSHFS (SFTP) (Temporary data is stored on external storage, where an archive with a backup copy is also created) Dependent on the size of the storage.
+
 SKIP_MYSQL_BACKUP="false" # If there are no databases on the server, change to true.
 
 KEEP_FILES=3 # Number of backups.
@@ -16,8 +19,13 @@ MAX_FTP_SIZE="75" # FTP storage size in GB.
 # Paths
 disk_path="/dev/vda1" # For checking disk space (Check using df -h to find which disk is / and specify it here)
 log_file="/var/log/sh_backup.log" # Log file
-FILESPATH="/" # Path to the folder to be copied
-
+FILESPATH="/" # The path to the directory where the sites are located.
+if [ "$TRANSPORT_METHOD" = "0" ]; then
+BACKUP_DIR="/backup/tmp.bk"
+else 
+if [ "$TRANSPORT_METHOD" = "1" ]; then
+BACKUP_DIR="/mnt/backup/tmp.bk"
+fi
 
 # These variables should not be edited.
 CURRENT_DATE=$(date +%Y-%m-%d)
@@ -31,13 +39,6 @@ Key there
 
 # Clearing script logs upon startup (to prevent logs from taking up all disk space and showing only the latest entries).
 > "$log_file"
-
-if [ "$TRANSPORT_METHOD" = "0" ]; then
-BACKUP_DIR="/backup/tmp.bk"
-else 
-if [ "$TRANSPORT_METHOD" = "1" ]; then
-BACKUP_DIR="/mnt/backup/tmp.bk"
-fi
 
 # Error handler
 handle_error() {
@@ -223,6 +224,6 @@ tar -czf "/mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz" ${BACKUP_DIR} || {
 ls -t "/mnt/${WHERE2}/backup_*.tar.gz" | tail -n +$((KEEP_FILES + 1)) | xargs -r -I {} sh -c 'rm -f "{}" && echo "{} removed" >> "$log_file"'
 echo "$(date '+%Y-%m-%d %H:%M:%S') Backup process completed" >> "$log_file"
 
-umount /mnt
+umount -l /mnt
 cleanup_folder
 echo "$(date '+%Y-%m-%d %H:%M:%S') Script finished" >> "$log_file"
