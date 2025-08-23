@@ -1,134 +1,228 @@
 #!/bin/bash
-# Переменные
+# Variables
 DB_HOST="localhost"
-DB_USER="root" #Пользователь всех баз данных
-DB_PASSWORD="*******" #Пароль от пользователя 
-#Настройки подключения FTP
-SERVER="*****" #Сервер FTP
-USER="*****" #Пользователь FTP
-PASS="****" #Пароль FTP
-PORT="21" #На случай если нужно использовать SFTP 
-WHERE2="****"#Путь в FTP хранилище куда будут идти файлы
+DB_USER="root" # User for all databases
+DB_PASSWORD="" # Password for the user (usually located at /root/.my.cnf)
+# FTP connection settings
+SERVER="" # FTP server
+USER="" # FTP user
+PASS="" # FTP password
+WHERE2="/backup" # Path in the FTP storage where files will be sent
+TRANSPORT_METHOD="0" # 0 for standard FTP, 1 for SFTP (SSH) (less secure but faster method) (Second method dont work)
+SKIP_MYSQL_BACKUP="false" # If there are no databases on the server, change to true.
 
-# Пути (Нипутю - тут не хватает котиков)
-disk_path="/dev/vda2" # Для проверки места на диске
-BACKUP_DIR="/backup/tmp.bk/" # Папка куда будут идти бекапы
-log_file="/var/log/sh_backup.log" # Лог файл
+KEEP_FILES=3 # Number of backups.
+MAX_FTP_SIZE="75" # FTP storage size in GB.
+# Paths
+disk_path="/dev/vda1" # For checking disk space (Check using df -h to find which disk is / and specify it here)
+log_file="/var/log/sh_backup.log" # Log file
+FILESPATH="/" # Path to the folder to be copied
 
-#Обработчик ошибок
+
+# These variables should not be edited.
+CURRENT_DATE=$(date +%Y-%m-%d)
+LOCK_FILE="/var/lock/backup.lock" # Ensures that the script does not run while another process is active.
+
+PRIVATE_KEY='
+-----BEGIN OPENSSH PRIVATE KEY-----
+Key there
+-----END OPENSSH PRIVATE KEY-----
+'
+
+# Clearing script logs upon startup (to prevent logs from taking up all disk space and showing only the latest entries).
+> "$log_file"
+
+if [ "$TRANSPORT_METHOD" = "0" ]; then
+BACKUP_DIR="/backup/tmp.bk"
+else 
+if [ "$TRANSPORT_METHOD" = "1" ]; then
+BACKUP_DIR="/mnt/backup/tmp.bk"
+fi
+
+# Error handler
 handle_error() {
-touch /var/log/sh_backup.log
-    echo "Ошибка выполнения кода." >> "$log_file"  # Логирование ошибки в файл
+    touch /var/log/sh_backup.log
+    echo "ERROR: $(date '+%Y-%m-%d %H:%M:%S') An error occurred during execution (code: $?)" >> "$log_file"  # Log the error code
     cleanup_folder
+    umount -l /mnt
     exit 1
 }
-# Установка обработчика ошибки
+# Setting up the error handler
 trap 'handle_error' ERR
-#Очистка если скрипт завершился ошибкой
-cleanup_folder() {
-rm -rf /backup/tmp.bk
-rm /backup/$(date +%Y-%m-%d).tar.gz
-}
-# Проверка пакетного менеджера
-if command -v apt-get > /dev/null; then
-    package_manager="apt"
-elif command -v yum > /dev/null; then
-    package_manager="yum"
-else
-    echo "Не удалось определить пакетный менеджер для установки пакетов" >> "$log_file"
+
+# Preventing multiple script instances from running
+if [ -e "$LOCK_FILE" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Previous backup process is still running" >> "$log_file"
     exit 1
 fi
-# Проверка и установка пакетов
-check_and_install_package "curlftpfs" "$package_manager"
-check_and_install_package "rsync" "$package_manager"
-# Проверка наличия пакета и установка
-check_and_install_package() {
+
+touch "$LOCK_FILE"
+trap 'rm -f $LOCK_FILE' EXIT
+
+# Cleanup if the script terminates with an error
+cleanup_folder() {
+    [ -d "${BACKUP_DIR}" ] && rm -rf "${BACKUP_DIR}"
+
+    today_backup="${WHERE2}/backup_$(date +%F).tar.gz"
+    if [ -f "$today_backup" ]; then
+        rm -f "$today_backup"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Removed today's backup: $today_backup" >> "$log_file"
+    fi
+
+    rm -f "$KEYFILE"
+}
+
+# Checking if FTP credentials are provided
+if [ -z "$SERVER" ] || [ -z "$USER" ] || [ -z "$PASS" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') FTP connection parameters are not specified" >> "$log_file"
+    exit 1
+fi
+
+# Checking MySQL credentials
+if [ "$SKIP_MYSQL_BACKUP" != "true" ]; then
+    if ! mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -e "SELECT 1" &> /dev/null; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Database connection error" >> "$log_file"
+        exit 1
+    fi
+
+    # Query to calculate database size
+    query="SELECT SUM(data_length + index_length) FROM information_schema.TABLES WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');"
+    db_size=$(mysql -h "${DB_HOST}" -u "${DB_USER}" -p"${DB_PASSWORD}" -N -s -e "$query")
+else
+    db_size=0
+fi
+
+# Determining the package manager
+if command -v apt-get > /dev/null; then
+    package_manager="apt-get"
+elif command -v yum > /dev/null; then
+    package_manager="yum"
+elif command -v dnf > /dev/null; then
+    package_manager="dnf"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Failed to determine package manager for installing packages" >> "$log_file"
+    exit 1
+fi
+
+# Function to install a package
+install_package() {
     local package_name="$1"
-    local package_manager="$2"
     if ! command -v "$package_name" > /dev/null; then
-        echo "Установка пакета $package_name..." >> "$log_file"
-         case "$package_manager" in
-            apt)
-                sudo apt-get update
-                sudo apt-get install -y "$package_name"
-                ;;
-            yum)
-                sudo yum install -y "$package_name"
-                ;;
-            *)
-                echo "Не удалось определить пакетный менеджер для установки пакета $package_name" >> "$log_file"
-                ;;
-        esac
+        echo "Installing package $package_name..." >> "$log_file"
+        sudo "$package_manager" install -y "$package_name"
     fi
 }
 
-
-#Проверка на наличие одной из четырёх панелей управления, если нет ниодной скрипт останавливается
-if [ ! -d "/etc/vesta" ] && [ ! -d "/etc/hestia" ] && [ ! -d "/etc/cyberpanel" ] && [ ! -d "/usr/local/mgr5" ]; then
-echo "На сервере нет панели управления" >> "$log_file"
-exit 1
+# Installing necessary packages based on the transport method
+if [ "$TRANSPORT_METHOD" = "0" ]; then
+    install_package "curlftpfs"
+    install_package "rsync"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via curlftpfs" >> "$log_file"
+    curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:/ /mnt
+else
+	if [ "$TRANSPORT_METHOD" = "1" ]; then
+    install_package "sshfs"
+    install_package "rsync"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via sshfs" >> "$log_file"
+    KEYFILE=$(mktemp)
+    chmod 600 "$KEYFILE"
+    echo "$PRIVATE_KEY" > "$KEYFILE"
+    sshfs -o IdentityFile="$KEYFILE",StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null ${USER}@${SERVER}:/ /mnt
+    echo "This method in work and testing"
 fi
-# Выполнение запроса к базе данных MySQL и извлечение общего размера
-query="SELECT SUM(data_length + index_length) FROM information_schema.TABLES WHERE table_schema NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');"
-db_size=$(mysql -h "$db_host" -u "$db_user" -p"$db_password" -N -s -e "$query")
-# Получение доступного места на диске в килобайтах
+
+# Checking if the mount was successful
+if ! mountpoint -q /mnt; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Mounting error" >> "$log_file"
+    cleanup_folder
+    exit 1
+fi
+
+# Checking if the backup folder exists; if not, create it
+if [ ! -d "${BACKUP_DIR}" ]; then
+    mkdir -p ${BACKUP_DIR}/{web,db}
+else
+    if [ ! -w "${BACKUP_DIR}" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Insufficient permissions to write to ${BACKUP_DIR} directory" >> "$log_file"
+        umount -l /mnt
+        cleanup_folder
+        exit 1
+    fi
+fi
+if [ ! -d "/mnt/${WHERE2}" ]; then
+    mkdir -p /mnt/${WHERE2}
+else
+    if [ ! -w "/mnt/${WHERE2}" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Insufficient permissions to write to /mnt/${WHERE2} directory" >> "$log_file"
+        cleanup_folder
+		umount -l /mnt
+        exit 1
+    fi
+fi
+
+# Convert GB to KB
+gb_to_kb() {
+    echo $((${1} * 1024 * 1024))
+}
+
+# Calculate FTP storage max size in KB
+max_ftp_size_kb=$(($(gb_to_kb "$MAX_FTP_SIZE") * 95 / 100))
+# Get available disk space in KB
 available_space=$(df -k --output=avail "$disk_path" | tail -n 1)
-# Получение размера бэкапа в килобайтах
-backup_size=$(du -sk "$files_directory" | awk '{print $1}')
+# Get backup size in KB
+backup_size=$(du -sk "${FILESPATH}" | awk '{print $1}')
 total_size=$((db_size + backup_size))
-# Сравнение размера бэкапа с доступным местом
+
+# Check if there is enough disk space
 if [ "$total_size" -gt "$available_space" ]; then
-echo "Недостаточно свободного места на диске. Бэкап не может быть создан." >> "$log_file"
-exit 1
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Not enough free disk space. Backup cannot be created." >> "$log_file"
+    cleanup_folder
+    exit 1
 fi
-#Проверка на наличие папки бекап, если нет создаст.
-if [ ! -d "/backup" ]; then
-mkdir -p "/backup"
-fi
-mkdir /backup/tmp.bk
-mkdir /backup/tmp.bk/web
-mkdir /backup/tmp.bk/db
-#Проверка баз данных и исключение стандартных БД.
-#DB_LIST=$(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e "SHOW DATABASES WHERE \`Database\` NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys');" | grep -v Database)
 
-# Имя и путь для сохранения резервных копий
+# Check if the backup size exceeds FTP storage max size
+if [ "$total_size" -gt "$max_ftp_size_kb" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Backup size exceeds FTP storage max size ($MAX_FTP_SIZE GB)." >> "$log_file"
+    cleanup_folder
+    exit 1
+fi
 
-CURRENT_DATE=$(date +%Y-%m-%d)
-#BACKUP_PATH="${BACKUP_DIR}/db_backup_${CURRENT_DATE}.sql"
-#for DATABASE in ${DB_LIST}; do
-    #mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "$BACKUP_DIR/$DATABASE.sql"
-for db in $(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e 'show databases' -s --skip-column-names); do if [[ "$db" != "information_schema" && "$db" != "performance_schema" && "$db" != "mysql" && "$db" != "sys" && "$db" != "roudcube" && "$db" != "phpmyadmin"]]; then mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} "$BACKUP_DIR/$db.sql"; fi; done
-done
-# Проверка наличия папки VestaCP в директории /etc
-if [ -d "/etc/vesta" ]; then
-    echo "Найдена папка VestaCP в директории /etc" >> "$log_file"
-	rsync -azhP --exclude='/hoome/backup' /home/* /backup/tmp.bk/we
-        files_directory="/home" 
- fi
-# Проверка наличия папки HestiaCP в директории /etc
-if [ -d "/etc/hestia" ]; then
-    echo "Найдена папка HestiaCP в директории /etc" >> "$log_file"
-	rsync -azhP --exclude='/home/backup' /home/* /backup/tmp.bk/web
-        files_directory="/home" 
+# Perform MySQL backup if required
+if [ "$SKIP_MYSQL_BACKUP" != "true" ]; then
+    DB_LIST=$(mysql -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} -e "SHOW DATABASES;" -s --skip-column-names | grep -v -E '^(information_schema|mysql|performance_schema|sys)$')
+
+    # Define backup file name and path
+    BACKUP_PATH="${BACKUP_DIR}/db_backup_${CURRENT_DATE}.sql"
+
+    # Backup each database
+    for DATABASE in ${DB_LIST}; do
+        mysqldump -h ${DB_HOST} -u ${DB_USER} -p${DB_PASSWORD} --single-transaction --add-drop-table --create-options --disable-keys --extended-insert --quick --set-charset --routines --triggers ${DATABASE} > "${BACKUP_DIR}/db/${DATABASE}.sql"
+    done
+    echo "$(date '+%Y-%m-%d %H:%M:%S') MySQL backup completed" >> "$log_file"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') MySQL backup skipped" >> "$log_file"
 fi
-if [ -d "/etc/cyberpanel" ]; then
-    echo "Найдена папка CyberPanel в директории /etc"  >> "$log_file"
-	rsync -azhP  /home/* /backup/tmp.bk/web
-        files_directory="/home" 
+
+# Copying website files
+echo "$(date '+%Y-%m-%d %H:%M:%S') Copying website files" >> "$log_file"
+if ! rsync -azhP ${FILESPATH} ${BACKUP_DIR}/web; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Error copying website files" >> "$log_file"
+    cleanup_folder
+    exit 1
 fi
-# Проверка наличия папки mgr5 в директории /usr/local
-if [ -d "/usr/local/mgr5" ]; then
-    echo "Найдена папка mgr5 в директории /usr/local" >> "$log_file"
-	rsync -azhP /var/www/www-root/data/www/* /backup/tmp.bk/web
-        files_directory="/home" 
-fi
-echo "Архивирование" >> "$log_file"
-tar -cf /backup_$(date +%Y-%m-%d).tar.gz /backup/tmp.bk
-echo "Подключение" >> "$log_file"
-curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:$PORT /mnt
-echo "Копирование" >> "$log_file"
-cp /backup/$(date +%Y-%m-%d).tar.gz /${WHERE2}
-echo "Копирование завершено" >> "$log_file"
+
+# Archiving directly to FTP
+echo "$(date '+%Y-%m-%d %H:%M:%S') Archiving directly to FTP" >> "$log_file"
+tar -czf "/mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz" ${BACKUP_DIR} || {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Error creating archive" >> "$log_file"
+    cleanup_folder
+    exit 1
+}
+
+# File rotation
+ls -t "/mnt/${WHERE2}/backup_*.tar.gz" | tail -n +$((KEEP_FILES + 1)) | xargs -r -I {} sh -c 'rm -f "{}" && echo "{} removed" >> "$log_file"'
+echo "$(date '+%Y-%m-%d %H:%M:%S') Backup process completed" >> "$log_file"
+
 umount /mnt
 cleanup_folder
-echo "Скрипт завершён" >> "$log_file"
+echo "$(date '+%Y-%m-%d %H:%M:%S') Script finished" >> "$log_file"
