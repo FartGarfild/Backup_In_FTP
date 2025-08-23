@@ -37,7 +37,7 @@ handle_error() {
     touch /var/log/sh_backup.log
     echo "ERROR: $(date '+%Y-%m-%d %H:%M:%S') An error occurred during execution (code: $?)" >> "$log_file"  # Log the error code
     cleanup_folder
-    umount /mnt
+    umount -l /mnt
     exit 1
 }
 # Setting up the error handler
