@@ -2,22 +2,30 @@
 # Variables
 DB_HOST="localhost"
 DB_USER="root" # User for all databases
-DB_PASSWORD="" # Password for the user (usually located at /root/.my.cnf)
+DB_PASSWORD="" # Password for the root user (usually located at /root/.my.cnf)
 # FTP connection settings
 SERVER="" # FTP server
 USER="" # FTP user
 PASS="" # FTP password
-WHERE2="/backup" # Path in the FTP storage where files will be sent
-TRANSPORT_METHOD="0" # 0 for standard FTP, 1 for SFTP (SSH) (less secure but faster method) (Second method dont work)
+WHERE2="/backup" # The path where all backup copies will be saved.
+TRANSPORT_METHOD="0" 
+# 0: standard FTP (Temporary files are stored on the server where the sites themselves are). 
+# 1: SSHFS (SFTP) (Temporary data is stored on external storage, where an archive with a backup copy is also created) Dependent on the size of the storage.
+
 SKIP_MYSQL_BACKUP="false" # If there are no databases on the server, change to true.
 
 KEEP_FILES=3 # Number of backups.
 MAX_FTP_SIZE="75" # FTP storage size in GB.
 # Paths
 disk_path="/dev/vda1" # For checking disk space (Check using df -h to find which disk is / and specify it here)
-BACKUP_DIR="/backup/tmp.bk" # Folder where backups will go
 log_file="/var/log/sh_backup.log" # Log file
-FILESPATH="/" # Path to the folder to be copied
+FILESPATH="/" # The path to the directory where the sites are located.
+if [ "$TRANSPORT_METHOD" = "0" ]; then
+BACKUP_DIR="/backup/tmp.bk"
+else 
+if [ "$TRANSPORT_METHOD" = "1" ]; then
+BACKUP_DIR="/mnt/backup/tmp.bk"
+fi
 
 # These variables should not be edited.
 CURRENT_DATE=$(date +%Y-%m-%d)
@@ -54,8 +62,14 @@ trap 'rm -f $LOCK_FILE' EXIT
 
 # Cleanup if the script terminates with an error
 cleanup_folder() {
-    [ -d "/backup/tmp.bk" ] && rm -rf /backup/tmp.bk
-    [ "$(ls /backup/*.tar.gz 2>/dev/null)" ] && rm /backup/*.tar.gz
+    [ -d "${BACKUP_DIR}" ] && rm -rf "${BACKUP_DIR}"
+
+    today_backup="${WHERE2}/backup_$(date +%F).tar.gz"
+    if [ -f "$today_backup" ]; then
+        rm -f "$today_backup"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Removed today's backup: $today_backup" >> "$log_file"
+    fi
+
     rm -f "$KEYFILE"
 }
 
@@ -107,14 +121,14 @@ if [ "$TRANSPORT_METHOD" = "0" ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via curlftpfs" >> "$log_file"
     curlftpfs -o allow_other ${USER}:${PASS}@${SERVER}:/ /mnt
 else
+	if [ "$TRANSPORT_METHOD" = "1" ]; then
     install_package "sshfs"
     install_package "rsync"
     echo "$(date '+%Y-%m-%d %H:%M:%S') Connecting via sshfs" >> "$log_file"
     KEYFILE=$(mktemp)
     chmod 600 "$KEYFILE"
     echo "$PRIVATE_KEY" > "$KEYFILE"
-    sshfs -o IdentityFile='$KEYFILE',StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null ${USER}@${SERVER}:/ /mnt
-    exit 1
+    sshfs -o IdentityFile="$KEYFILE",StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null ${USER}@${SERVER}:/ /mnt
     echo "This method in work and testing"
 fi
 
@@ -126,12 +140,12 @@ if ! mountpoint -q /mnt; then
 fi
 
 # Checking if the backup folder exists; if not, create it
-if [ ! -d "/backup" ]; then
-    mkdir -p /backup/tmp.bk/{web,db}
+if [ ! -d "${BACKUP_DIR}" ]; then
+    mkdir -p ${BACKUP_DIR}/{web,db}
 else
-    if [ ! -w "/backup" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Insufficient permissions to write to /backup directory" >> "$log_file"
-        umount /mnt
+    if [ ! -w "${BACKUP_DIR}" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Insufficient permissions to write to ${BACKUP_DIR} directory" >> "$log_file"
+        umount -l /mnt
         cleanup_folder
         exit 1
     fi
@@ -140,9 +154,9 @@ if [ ! -d "/mnt/${WHERE2}" ]; then
     mkdir -p /mnt/${WHERE2}
 else
     if [ ! -w "/mnt/${WHERE2}" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') Insufficient permissions to write to /mnt/backup directory" >> "$log_file"
-        umount /mnt
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Insufficient permissions to write to /mnt/${WHERE2} directory" >> "$log_file"
         cleanup_folder
+		umount -l /mnt
         exit 1
     fi
 fi
@@ -192,7 +206,7 @@ fi
 
 # Copying website files
 echo "$(date '+%Y-%m-%d %H:%M:%S') Copying website files" >> "$log_file"
-if ! rsync -azhP ${FILESPATH} /backup/tmp.bk/web; then
+if ! rsync -azhP ${FILESPATH} ${BACKUP_DIR}/web; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') Error copying website files" >> "$log_file"
     cleanup_folder
     exit 1
@@ -200,7 +214,7 @@ fi
 
 # Archiving directly to FTP
 echo "$(date '+%Y-%m-%d %H:%M:%S') Archiving directly to FTP" >> "$log_file"
-tar -czf "/mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz" /backup/tmp.bk || {
+tar -czf "/mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz" ${BACKUP_DIR} || {
     echo "$(date '+%Y-%m-%d %H:%M:%S') Error creating archive" >> "$log_file"
     cleanup_folder
     exit 1
@@ -210,6 +224,6 @@ tar -czf "/mnt/${WHERE2}/backup_$(date +%Y-%m-%d).tar.gz" /backup/tmp.bk || {
 ls -t "/mnt/${WHERE2}/backup_*.tar.gz" | tail -n +$((KEEP_FILES + 1)) | xargs -r -I {} sh -c 'rm -f "{}" && echo "{} removed" >> "$log_file"'
 echo "$(date '+%Y-%m-%d %H:%M:%S') Backup process completed" >> "$log_file"
 
-umount /mnt
+umount -l /mnt
 cleanup_folder
 echo "$(date '+%Y-%m-%d %H:%M:%S') Script finished" >> "$log_file"
